@@ -53,9 +53,9 @@ def main(args):
 
     """ test scenario """
     if args.scenario == "benign":
-        seq_queries.benign(device, cfg, args.data, target_model, delta_net, test_ldr)
+        seq_queries.benign(device, cfg, args.data, target_model, delta_net, test_ldr, args.n_images)
     else:
-        seq_queries.attack(device, cfg, args.data, target_model, delta_net, test_ldr)
+        seq_queries.attack(device, cfg, args.data, target_model, delta_net, test_ldr, args.n_images)
 
 
 if __name__ == '__main__':
@@ -63,6 +63,8 @@ if __name__ == '__main__':
     parser.add_argument('--data', type=str)
     parser.add_argument('--attack', type=str)
     parser.add_argument('--scenario', type=str)
+    # benign: number of benign queries, attack: number of attacked images (benign pool excluded)
+    parser.add_argument('--n_images', type=int, default=None)
 
     arg = parser.parse_args()
 

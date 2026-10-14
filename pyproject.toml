@@ -1,0 +1,29 @@
+[project]
+name = "gwad-reproduction"
+version = "0.1.0"
+description = "Reproduction of GWAD (CVPR 2025): detecting black-box adversarial attacks via query update analysis"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "numpy",
+    "scikit-image",
+    "opencv-python-headless",
+    "matplotlib",
+    "tqdm",
+    "gdown",
+    "truststore",
+]
+
+[tool.uv]
+package = false
+
+# Windows / Linux -> CUDA 12.6 wheels; macOS -> default PyPI wheels (CPU / MPS)
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cu126", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

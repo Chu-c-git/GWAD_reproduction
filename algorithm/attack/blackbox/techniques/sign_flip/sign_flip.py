@@ -59,7 +59,7 @@ class SignFlip(HardLabelAttackBase):
         return torch.max(x - l, torch.min(x_a, x + l))
 
     def binary_infinity(self, x_adv, k):
-        lb = torch.zeros(1).cuda()
+        lb = torch.zeros(1).to(x_adv.device)
         ub = torch.max(torch.abs(x_adv - self.x))
         for _ in range(k):
             mid = (lb + ub) / 2

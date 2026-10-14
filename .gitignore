@@ -1,0 +1,11 @@
+# environment
+.venv/
+__pycache__/
+*.pyc
+
+# downloaded dataset / target model weights
+data/
+model/cifar10/
+
+# notebook checkpoints
+.ipynb_checkpoints/

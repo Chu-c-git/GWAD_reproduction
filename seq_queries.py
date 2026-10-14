@@ -55,7 +55,7 @@ def save_distributions(stats_dir, model, stats, feat_type, data_type):
     np.savetxt('%s.txt' % (dist_file), dist, delimiter=',')
 
 
-def benign(device, cfg, data_type, model, delta_net, loader):
+def benign(device, cfg, data_type, model, delta_net, loader, n_images=None):
     stats_dir = 'stats'
     cfg_gwad = cfg["gwad"]
     attack_name = 'benign'
@@ -74,6 +74,8 @@ def benign(device, cfg, data_type, model, delta_net, loader):
     total_queries = 0
     idx = 0
     for data, true_class in loader:
+        if n_images is not None and idx >= n_images:
+            break
         if idx%10 == 0:
             print(end='\r')
             print("{}/{}".format(idx, len(loader)), end='')
@@ -94,7 +96,7 @@ def benign(device, cfg, data_type, model, delta_net, loader):
     save_distributions(stats_dir, model, stats, attack_name, data_type)
 
 
-def attack(device, cfg, data_type, model, delta_net, loader):
+def attack(device, cfg, data_type, model, delta_net, loader, n_images=None):
     stats_dir = 'stats'
     cfg_attack, cfg_gwad = cfg["attack"], cfg["gwad"]
     attack_name = cfg_attack["name"]
@@ -130,6 +132,9 @@ def attack(device, cfg, data_type, model, delta_net, loader):
             if len(x2_pool) < pool_size:
                 x2_pool.append(data)
                 continue
+
+        if n_images is not None and cnt >= n_images:
+            break
 
         # reset gwad
         gwad_def.reset()

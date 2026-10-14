@@ -2,6 +2,22 @@
 # Mind the Gap: Detecting Black-box Adversarial Attacks in the Making through Query Update Analysis
 Pytorch code for CVPR 2025 paper [Mind the Gap: Detecting Black-box Adversarial Attacks in the Making through Query Update Analysis](https://openaccess.thecvf.com/content/CVPR2025/papers/Park_Mind_the_Gap_Detecting_Black-box_Adversarial_Attacks_in_the_Making_CVPR_2025_paper.pdf). This repository contains the demo code for reproducing the experimental results of GWAD and GWAD+. 
 
+# Reproduction quick start (macOS / Windows / Linux)
+Environment is managed by [uv](https://docs.astral.sh/uv/). `uv.lock` pins identical versions for everyone; Windows/Linux get CUDA 12.6 PyTorch wheels, macOS gets the default (CPU) wheels.
+
+```
+uv sync                                   # create .venv from uv.lock
+uv run python scripts/download_weights.py # resnet18.pt -> model/cifar10/ (downloads ~1GB zip from Google Drive, keeps 43MB)
+uv run python demo.py --data cifar10 --attack hsja --scenario standard --n_images 5
+```
+
+- CIFAR-10 is downloaded to `data/` on first run (~170MB; the Toronto server can be slow).
+- `--n_images` limits the run: benign = number of benign queries, attack = number of attacked images (the 2000-image benign pool of the batch scenario is not counted). Omit it to run the full 10k test set (days for attack scenarios).
+- If downloads fail with `certificate verify failed` (antivirus / proxy TLS inspection), run uv with `--native-tls`.
+- Colab: open `colab_gwad.ipynb` (caches weights, data and results in Google Drive).
+
+Changes from upstream for portability: `torch.load(..., map_location=...)` so CUDA-saved weights load on CPU-only machines, sign-flip no longer hardcodes `.cuda()`, `--n_images` option added.
+
 # Dependencies
 - pytorch
 - numpy
