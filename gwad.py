@@ -88,6 +88,11 @@ class GWAD():
 
         self.suspicious = False
 
+        # per-query record for visualisation (tools/visualize.py), enabled by --save_dir
+        self.recorder = None
+        self.last_pred = None
+        self.first_detect = None
+
     def defended_model(self, x):
         self.query_cnt += 1
         return self.model(x)
@@ -109,6 +114,7 @@ class GWAD():
         self.example_q.clear()
         self.ds_q.clear()
         self.hods_flag = False
+        self.first_detect = None
         print("\nGWAD_%s starts" % (self.mode))
         return
 
@@ -192,11 +198,14 @@ class GWAD():
             del hods
 
             # check Delta-Net prediction
+            self.last_pred = self.classes[hx]
             if self.classes[hx] == 'benign':
                 # failed - benign
                 flag = False
             else:
                 flag = True
+                if self.first_detect is None:
+                    self.first_detect = self.query_cnt
                 if self.show_detect:
                     print("GWAD_%s : first detection [%s] made @ %dth query" % (self.mode, self.classes[hx], self.query_cnt))
                     self.show_detect = False
@@ -268,7 +277,9 @@ class GWAD():
             self.save_query(q)
 
         # check example queue is full for detection
+        self.last_pred = None
         if self.examples_ready() is False:
+            self.record_query(q, None)
             return output
 
         # calculate delta similarity
@@ -285,7 +296,12 @@ class GWAD():
 
         # check under attack
         self.attack_detect()
+        self.record_query(q, ds)
         return output
+
+    def record_query(self, q, ds):
+        if self.recorder is not None and self.mode == 'defence':
+            self.recorder.log_query(self.query_cnt, q.t, not self.suspicious, ds, self.last_pred, q.x)
 
     def get_stats(self, image):
         x = image.clone().detach()

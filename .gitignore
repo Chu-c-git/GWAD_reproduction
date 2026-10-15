@@ -9,3 +9,6 @@ model/cifar10/
 
 # notebook checkpoints
 .ipynb_checkpoints/
+
+# GWAD run results (--save_dir)
+results/

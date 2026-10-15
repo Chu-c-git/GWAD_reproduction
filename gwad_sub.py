@@ -117,7 +117,9 @@ class ExampleSave:
         self.data_std = std
         self.data_foramt = format
 
-    def ready_img(self, x):
+    def ready_img(self, x, format=None):
+        # format: 'tensor' -> CHW float tensor in [0, 255], otherwise HWC uint8 numpy (RGB)
+        format = self.data_foramt if format is None else format
         shape = x.size()
         img = x.clone().detach()
         img = img.reshape(shape[1], shape[2], shape[3])
@@ -125,18 +127,19 @@ class ExampleSave:
             img[i] = img[i] * self.data_std[i] + self.data_mu[i]
 
         img = img.cpu()
-        if self.data_foramt == 'tensor':
+        if format == 'tensor':
             img *= 255
         else:
             img = img.permute(1, 2, 0).numpy()
-            img *= 255
+            img = np.clip(img * 255, 0, 255)
             img = np.uint8(img)
         return img
 
     def imwrite(self, x, directory, id):
-        img = self.ready_img(x, type='numpy')
+        img = self.ready_img(x, format='numpy')
 
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # assuming the model is pretrained with RGB images.
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)  # assuming the model is pretrained with RGB images.
+        os.makedirs(directory, exist_ok=True)
         cv2.imwrite(os.path.join(directory, '{}.jpg'.format(id)), img)
         return
 

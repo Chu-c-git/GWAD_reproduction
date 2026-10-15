@@ -13,6 +13,7 @@ uv run python demo.py --data cifar10 --attack hsja --scenario standard --n_image
 
 - CIFAR-10 is downloaded to `data/` on first run (~170MB; the Toronto server can be slow).
 - `--n_images` limits the run: benign = number of benign queries, attack = number of attacked images (the 2000-image benign pool of the batch scenario is not counted). Omit it to run the full 10k test set (days for attack scenarios).
+- `--save_dir [DIR]` (default `results`) saves each run in `DIR/<timestamp>_<attack>_<scenario>_<model>/`: `summary.csv` + `summary/img_XXXX.png` (original | adversarial | perturbation, XXXX = test set index), `gwad_timeline.csv` (every query: type, screened, delta similarity, Delta-Net prediction), `gwad_timeline.png` (detection rate over queries + first detection histogram) and `queries/` (every `--save_every` attack queries, default 500, 0 = off).
 - If downloads fail with `certificate verify failed` (antivirus / proxy TLS inspection), run uv with `--native-tls`.
 - Colab: open `colab_gwad.ipynb` (caches weights, data and results in Google Drive).
 

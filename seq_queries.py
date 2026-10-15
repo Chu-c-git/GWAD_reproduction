@@ -55,7 +55,7 @@ def save_distributions(stats_dir, model, stats, feat_type, data_type):
     np.savetxt('%s.txt' % (dist_file), dist, delimiter=',')
 
 
-def benign(device, cfg, data_type, model, delta_net, loader, n_images=None):
+def benign(device, cfg, data_type, model, delta_net, loader, n_images=None, recorder=None):
     stats_dir = 'stats'
     cfg_gwad = cfg["gwad"]
     attack_name = 'benign'
@@ -68,6 +68,11 @@ def benign(device, cfg, data_type, model, delta_net, loader, n_images=None):
 
     # reset gwad
     gwad_def.reset()
+
+    # record whole benign sequence as one image
+    gwad_def.recorder = recorder
+    if recorder is not None:
+        recorder.start_image(0)
 
     # main loop
     hx_record = np.zeros(len(delta_net.classes))
@@ -84,6 +89,9 @@ def benign(device, cfg, data_type, model, delta_net, loader, n_images=None):
         gwad_def.run(q)
         idx += 1
 
+    if recorder is not None:
+        recorder.end_sequence(gwad_def.first_detect)
+
     stats.increment_runs()
 
     # show gwad prediction record
@@ -96,7 +104,7 @@ def benign(device, cfg, data_type, model, delta_net, loader, n_images=None):
     save_distributions(stats_dir, model, stats, attack_name, data_type)
 
 
-def attack(device, cfg, data_type, model, delta_net, loader, n_images=None):
+def attack(device, cfg, data_type, model, delta_net, loader, n_images=None, recorder=None):
     stats_dir = 'stats'
     cfg_attack, cfg_gwad = cfg["attack"], cfg["gwad"]
     attack_name = cfg_attack["name"]
@@ -114,6 +122,7 @@ def attack(device, cfg, data_type, model, delta_net, loader, n_images=None):
     # - evaluate model : to inject generated adversarial example
     gwad_def = GWAD(device, cfg_gwad, stats.gwad, mode='defence', model=model, delta_net=delta_net)
     gwad_evl = GWAD(device, cfg_gwad, stats.gwad, mode='evaluate', model=model, delta_net=delta_net)
+    gwad_def.recorder = recorder
 
     # show setting
     print("\nsequence of queries : attack \n{} {} {} {}".format(data_type, model.name, attack_name, delta_net.name))
@@ -124,7 +133,7 @@ def attack(device, cfg, data_type, model, delta_net, loader, n_images=None):
     total_attack_queries = 0
     x2_pool = []
     cnt = 0
-    for data, true_class in loader:
+    for test_idx, (data, true_class) in enumerate(loader):
         data, true_class = data.to(device), true_class.to(device)
 
         # make benign example pool for multi-agent adaptive attack
@@ -138,6 +147,8 @@ def attack(device, cfg, data_type, model, delta_net, loader, n_images=None):
 
         # reset gwad
         gwad_def.reset()
+        if recorder is not None:
+            recorder.start_image(test_idx)
 
         # instantiate attack model to conduct fresh attack
         attack = ATTACK_MODEL(data_type, device, stats.attack, cfg_attack,
@@ -157,6 +168,12 @@ def attack(device, cfg, data_type, model, delta_net, loader, n_images=None):
 
         # update attack statistics
         attack.update_stats(data, adv[0], true_class, predict)
+
+        # save summary image of this attack
+        if recorder is not None:
+            recorder.end_image(data, adv[0], true_class.item(), int(stats.attack.hx),
+                               float(stats.attack.dist0), float(stats.attack.dist1),
+                               gwad_def.get_predictions(), gwad_def.first_detect, gwad_def.query_cnt)
 
         # increment count
         stats.increment_runs()

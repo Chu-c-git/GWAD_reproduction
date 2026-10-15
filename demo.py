@@ -3,6 +3,7 @@ import seq_queries
 from utilities.load_data import load_data, ConfigDataLoad
 from utilities.load_model import get_models
 from tools.delta_nets import get_delta_net
+from tools.visualize import RunRecorder
 import json
 from argparse import ArgumentParser
 
@@ -51,11 +52,25 @@ def main(args):
     """ load gwad classifier """
     delta_net = get_delta_net(device)
 
+    """ result recorder """
+    recorder = None
+    if args.save_dir is not None:
+        run_name = "benign" if args.scenario == "benign" else args.attack + "_" + args.scenario
+        run_name += "_" + cfg["gwad"]["model"]["name"]
+        run_config = {"args": vars(args), "cfg": cfg, "device": str(device), "torch": torch.__version__}
+        recorder = RunRecorder(args.save_dir, run_name, run_config, cfg["gwad"]["model"],
+                               classes, delta_net.classes, args.save_every)
+
     """ test scenario """
-    if args.scenario == "benign":
-        seq_queries.benign(device, cfg, args.data, target_model, delta_net, test_ldr, args.n_images)
-    else:
-        seq_queries.attack(device, cfg, args.data, target_model, delta_net, test_ldr, args.n_images)
+    try:
+        if args.scenario == "benign":
+            seq_queries.benign(device, cfg, args.data, target_model, delta_net, test_ldr, args.n_images, recorder)
+        else:
+            seq_queries.attack(device, cfg, args.data, target_model, delta_net, test_ldr, args.n_images, recorder)
+    finally:
+        # keep results of finished images even if the run is interrupted
+        if recorder is not None:
+            recorder.finish()
 
 
 if __name__ == '__main__':
@@ -65,6 +80,10 @@ if __name__ == '__main__':
     parser.add_argument('--scenario', type=str)
     # benign: number of benign queries, attack: number of attacked images (benign pool excluded)
     parser.add_argument('--n_images', type=int, default=None)
+    # save summary images and GWAD timeline in <save_dir>/<timestamp>_<run name>/ (default dir: results)
+    parser.add_argument('--save_dir', type=str, nargs='?', const='results', default=None)
+    # save every N-th attack query image in queries/ (0: off), only with --save_dir
+    parser.add_argument('--save_every', type=int, default=500)
 
     arg = parser.parse_args()
 
