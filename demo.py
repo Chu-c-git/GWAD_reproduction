@@ -34,6 +34,8 @@ def check_cfg(cfg):
 def main(args):
     json_file = "configs/" + args.data + "/" + args.attack + "/" + "cfg_" + args.scenario + ".json"
     cfg = json.load(open(json_file))
+    if args.model is not None:
+        cfg["gwad"]["model"]["name"] = args.model
     check_cfg(cfg)
 
     """ load threat model """
@@ -80,6 +82,8 @@ if __name__ == '__main__':
     parser.add_argument('--scenario', type=str)
     # benign: number of benign queries, attack: number of attacked images (benign pool excluded)
     parser.add_argument('--n_images', type=int, default=None)
+    # target model, overrides gwad.model.name in json config
+    parser.add_argument('--model', type=str, default=None, choices=['resnet18', 'resnet34', 'resnet50', 'mobilenet'])
     # save summary images and GWAD timeline in <save_dir>/<timestamp>_<run name>/ (default dir: results)
     parser.add_argument('--save_dir', type=str, nargs='?', const='results', default=None)
     # save every N-th attack query image in queries/ (0: off), only with --save_dir

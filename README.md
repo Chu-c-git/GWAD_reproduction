@@ -7,12 +7,13 @@ Environment is managed by [uv](https://docs.astral.sh/uv/). `uv.lock` pins ident
 
 ```
 uv sync                                   # create .venv from uv.lock
-uv run python scripts/download_weights.py # resnet18.pt -> model/cifar10/ (downloads ~1GB zip from Google Drive, keeps 43MB)
+uv run python scripts/download_weights.py # resnet18/34/50, mobilenet_v2 -> model/cifar10/ (downloads ~1GB zip from Google Drive, keeps 223MB)
 uv run python demo.py --data cifar10 --attack hsja --scenario standard --n_images 5
 ```
 
 - CIFAR-10 is downloaded to `data/` on first run (~170MB; the Toronto server can be slow).
 - `--n_images` limits the run: benign = number of benign queries, attack = number of attacked images (the 2000-image benign pool of the batch scenario is not counted). Omit it to run the full 10k test set (days for attack scenarios).
+- `--model {resnet18,resnet34,resnet50,mobilenet}` overrides the target model in the json config (default resnet18). MobileNetV2 takes ~2x longer per image than ResNet-18.
 - `--save_dir [DIR]` (default `results`) saves each run in `DIR/<timestamp>_<attack>_<scenario>_<model>/`: `summary.csv` + `summary/img_XXXX.png` (original | adversarial | perturbation, XXXX = test set index), `gwad_timeline.csv` (every query: type, screened, delta similarity, Delta-Net prediction), `gwad_timeline.png` (detection rate over queries + first detection histogram) and `queries/` (every `--save_every` attack queries, default 500, 0 = off).
 - If downloads fail with `certificate verify failed` (antivirus / proxy TLS inspection), run uv with `--native-tls`.
 - Colab: open `colab_gwad.ipynb` (caches weights, data and results in Google Drive).

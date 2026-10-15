@@ -20,6 +20,18 @@ def get_models(data_type, model_name):
             model.load_state_dict(torch.load('model/cifar10/resnet18.pt', map_location='cpu'))
             model.name = 'resnet-18'
             model.loss = 'cross entropy'
+        elif model_name == 'resnet34':
+            from net.cifar10.resnet import resnet34
+            model = resnet34()
+            model.load_state_dict(torch.load('model/cifar10/resnet34.pt', map_location='cpu'))
+            model.name = 'resnet-34'
+            model.loss = 'cross entropy'
+        elif model_name == 'resnet50':
+            from net.cifar10.resnet import resnet50
+            model = resnet50()
+            model.load_state_dict(torch.load('model/cifar10/resnet50.pt', map_location='cpu'))
+            model.name = 'resnet-50'
+            model.loss = 'cross entropy'
         elif model_name == 'mobilenet':
             from net.cifar10.mobilenetv2 import MobileNetV2
             model = MobileNetV2()

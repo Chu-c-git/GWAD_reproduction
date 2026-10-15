@@ -16,7 +16,7 @@ import gdown
 # Google Drive backup of state_dicts.zip in huyvnphan/PyTorch_CIFAR10 README (~933MB).
 # the Box link used by their train.py returns 404.
 GDRIVE_ID = "17fmN8eQdLpq2jIMQ_X0IXDPXfI9oVWgq"
-WANTED = ["resnet18.pt"]
+WANTED = ["resnet18.pt", "resnet34.pt", "resnet50.pt", "mobilenet_v2.pt"]  # models supported by utilities/load_model.py
 OUT_DIR = os.path.join("model", "cifar10")
 
 
