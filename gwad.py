@@ -6,26 +6,27 @@ import torchvision.transforms as T
 from gwad_sub import ExampleSave, Screener
 
 
-def extract_ds(x0, x1, x2):
-    # feature normalisation strategy
+_DS_TRANSFORM = T.Compose([
+    #T.Grayscale(num_output_channels=1),
+    T.Resize((32, 32))
+])
+
+
+def _ds_feature(x):
+    # per-example feature normalisation strategy (computed once per queued example)
     # 1. dimensionality normalisation
     #   - (discarded) convert to grayscale
     #   - convert to low dimension space using bilinear resizing method
-    transform = T.Compose([
-        #T.Grayscale(num_output_channels=1),
-        T.Resize((32, 32))
-    ])
-    x0 = transform(x0).flatten().cpu()
-    x1 = transform(x1).flatten().cpu()
-    x2 = transform(x2).flatten().cpu()
+    x = _DS_TRANSFORM(x).flatten().cpu()
 
     # 2. distribution normalisation
     #   - transpose to normal distribution with mu = 0.0
     #   - (discarded) standardise the length of vectors. unit vector
-    x0 = x0 - torch.mean(x0)
-    x1 = x1 - torch.mean(x1)
-    x2 = x2 - torch.mean(x2)
+    x = x - torch.mean(x)
+    return x
 
+
+def _ds_from_features(x0, x1, x2):
     # calculate delta feature
     d0 = (x1 - x0)
     d1 = (x2 - x1)
@@ -47,6 +48,10 @@ def extract_ds(x0, x1, x2):
     return ds, abs_angle, d0_norm, d1_norm
 
 
+def extract_ds(x0, x1, x2):
+    return _ds_from_features(_ds_feature(x0), _ds_feature(x1), _ds_feature(x2))
+
+
 class GWAD():
     def __init__(self, device, cfg, stats, mode='defence', model=None, delta_net=None):
         super().__init__()
@@ -62,8 +67,10 @@ class GWAD():
         fifo_depth = cfg["screen"]["n"]
         self.screener = Screener(enable=enable, thold=thold, sigma=3, n=fifo_depth, dim=32)
 
-        # example queue to calculate ds
+        # example queue to calculate ds, plus the cached ds feature (_ds_feature)
+        # of each queued example, kept in lockstep with example_q
         self.example_q = []
+        self.feat_q = []
 
         # ds configurations
         self.ds_size = 16*16
@@ -112,6 +119,7 @@ class GWAD():
         self.show_detect = True
         self.screener.reset()
         self.example_q.clear()
+        self.feat_q.clear()
         self.ds_q.clear()
         self.hods_flag = False
         self.first_detect = None
@@ -128,6 +136,7 @@ class GWAD():
         if self.examples_ready():
             # if examples queue is full shift and empty oldest slot for new example
             self.example_q.pop(0)
+            self.feat_q.pop(0)
 
         self.suspicious = True
         # check if example is suspicious
@@ -135,6 +144,7 @@ class GWAD():
         if self.suspicious:
             # suspicious query, pass to gwad
             self.example_q.append(x)
+            self.feat_q.append(_ds_feature(x))
         return
 
     def dss_ready(self):
@@ -215,13 +225,11 @@ class GWAD():
         return flag
 
     def calculate_ds(self):
-        # get three consecutive examples from the queue
-        x0 = self.example_q[0]
-        x1 = self.example_q[1]
-        x2 = self.example_q[2]
+        # get the cached features of the three consecutive queued examples
+        f0, f1, f2 = self.feat_q
 
         # get delta similarity
-        ds, _, d0_norm, _ = extract_ds(x0, x1, x2)
+        ds, _, d0_norm, _ = _ds_from_features(f0, f1, f2)
 
         return ds, d0_norm
 
