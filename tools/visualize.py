@@ -2,10 +2,14 @@ import os
 import csv
 import json
 import time
+import heapq
+import pickle
 import numpy as np
 from PIL import Image
 from matplotlib.figure import Figure
 from gwad_sub import ExampleSave
+
+TIMELINE_HEADER = ['img', 'query', 'type', 'screened', 'ds', 'pred']
 
 
 class RunRecorder:
@@ -19,22 +23,36 @@ class RunRecorder:
         gwad_timeline.csv               one row per query of every image
         gwad_timeline.png               detection rate over queries + first detection distribution
         queries/img_XXXX_qXXXXX.png     every `save_every` attack queries
+
+    Sharded runs (demo.py --workers N): every worker process ("part", id "<shard>.<attempt>") writes into the
+    same directory (run_dir) its own gwad_timeline.part<id>.csv and recorder.part<id>.pkl. Both are committed
+    after every finished image (commit_image), so a part killed by the watchdog keeps its finished images;
+    RunRecorder.merge() builds the files above from the images each part reported as done.
     """
-    def __init__(self, save_dir, run_name, run_config, cfg_model, data_classes, delta_classes, save_every=500):
+    def __init__(self, save_dir, run_name, run_config, cfg_model, data_classes, delta_classes, save_every=500,
+                 run_dir=None, part=None):
         self.name = run_name
-        self.dir = os.path.join(save_dir, '%s_%s' % (time.strftime('%Y%m%d-%H%M%S'), run_name))
+        self.part = part
+        if run_dir is None:
+            run_dir = self.new_dir(save_dir, run_name)
+        self.dir = run_dir
         os.makedirs(self.dir, exist_ok=True)
-        with open(os.path.join(self.dir, 'run_config.json'), 'w') as f:
-            json.dump(run_config, f, indent=2)
+        if part is None:
+            self.write_config(self.dir, run_config)
 
         self.example_save = ExampleSave(cfg_model["data_mu"], cfg_model["data_std"], 'numpy')
         self.data_classes = data_classes
         self.delta_classes = delta_classes
         self.save_every = save_every
 
-        self.timeline_file = open(os.path.join(self.dir, 'gwad_timeline.csv'), 'w', newline='')
+        timeline_name = 'gwad_timeline.csv' if part is None else 'gwad_timeline.part%s.csv' % part
+        self.timeline_file = open(os.path.join(self.dir, timeline_name), 'w', newline='')
         self.timeline = csv.writer(self.timeline_file)
-        self.timeline.writerow(['img', 'query', 'type', 'screened', 'ds', 'pred'])
+        self.timeline.writerow(TIMELINE_HEADER)
+        # per-image records of a part, appended (one pickle per image) by commit_image
+        self.records_file = None
+        if part is not None:
+            self.records_file = open(os.path.join(self.dir, 'recorder.part%s.pkl' % part), 'wb')
 
         self.summary_rows = []
         self.detect_seqs = []    # per image: 1 = delta-net predicts attack, 0 = benign, nan = HoDS not ready
@@ -44,6 +62,16 @@ class RunRecorder:
         self.attack_q = 0
         self.seq = []
         print("GWAD results are saved in %s" % self.dir)
+
+    @staticmethod
+    def new_dir(save_dir, run_name):
+        return os.path.join(save_dir, '%s_%s' % (time.strftime('%Y%m%d-%H%M%S'), run_name))
+
+    @staticmethod
+    def write_config(run_dir, run_config):
+        os.makedirs(run_dir, exist_ok=True)
+        with open(os.path.join(run_dir, 'run_config.json'), 'w') as f:
+            json.dump(run_config, f, indent=2)
 
     def start_image(self, img):
         self.img = img
@@ -113,9 +141,26 @@ class RunRecorder:
         os.makedirs(os.path.join(self.dir, 'summary'), exist_ok=True)
         fig.savefig(os.path.join(self.dir, 'summary', 'img_%04d.png' % self.img), dpi=100)
 
+    def commit_image(self):
+        # sharded run: persist the image that just ended (end_image) so it survives a killed worker.
+        # called before the part's state file marks the image as done (seq_queries.commit_part)
+        if self.part is None:
+            return
+        self.timeline_file.flush()
+        pickle.dump((self.summary_rows[-1]['img'], self.summary_rows[-1], self.detect_seqs[-1],
+                     self.first_detects[-1]), self.records_file)
+        self.records_file.flush()
+        # merged later from the files, no need to keep every timeline in memory
+        self.summary_rows.clear(); self.detect_seqs.clear(); self.first_detects.clear()
+
     def finish(self):
         self.timeline_file.close()
+        if self.records_file is not None:
+            self.records_file.close()
+            return
+        self.write_outputs()
 
+    def write_outputs(self):
         if self.summary_rows:
             with open(os.path.join(self.dir, 'summary.csv'), 'w', newline='') as f:
                 writer = csv.DictWriter(f, fieldnames=list(self.summary_rows[0].keys()))
@@ -124,6 +169,57 @@ class RunRecorder:
 
         if self.detect_seqs:
             self.plot_timeline()
+
+    @classmethod
+    def merge(cls, run_dir, run_name, done_by_part):
+        # merge the per-part outputs of a sharded run into the files of a single process run.
+        # done_by_part: {part id: set of test indices the part committed as done}. Only those images are
+        # taken from each part, which drops the unfinished image of a killed part (it is redone by a retry).
+        # images are ordered by test set index (= order of a single process run)
+        rec = cls.__new__(cls)
+        rec.name, rec.dir, rec.part = run_name, run_dir, None
+        images = {}
+        for part, done in done_by_part.items():
+            path = os.path.join(run_dir, 'recorder.part%s.pkl' % part)
+            if not os.path.exists(path):
+                if done:
+                    print("RunRecorder.merge : %s is missing" % path)
+                continue
+            with open(path, 'rb') as f:
+                while True:
+                    try:
+                        img, row, seq, first = pickle.load(f)
+                    except (EOFError, pickle.UnpicklingError):
+                        break  # end of file, or a record cut off when the part was killed
+                    if img in done:
+                        images[img] = (row, seq, first)
+            os.remove(path)
+        order = sorted(images)
+        rec.summary_rows = [images[i][0] for i in order]
+        rec.detect_seqs = [images[i][1] for i in order]
+        rec.first_detects = [images[i][2] for i in order]
+
+        # every part timeline is sorted by image and each image comes from exactly one part,
+        # so a k-way merge on the image column keeps the query order
+        def rows(path, done):
+            with open(path, newline='') as h:
+                r = csv.reader(h)
+                next(r, None)  # header
+                for row in r:
+                    if len(row) == len(TIMELINE_HEADER) and row[0].isdigit() and int(row[0]) in done:
+                        yield row
+
+        files = [(os.path.join(run_dir, 'gwad_timeline.part%s.csv' % p), d) for p, d in done_by_part.items()]
+        files = [(p, d) for p, d in files if os.path.exists(p)]
+        with open(os.path.join(run_dir, 'gwad_timeline.csv'), 'w', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(TIMELINE_HEADER)
+            w.writerows(heapq.merge(*[rows(p, d) for p, d in files], key=lambda row: int(row[0])))
+        for p, _ in files:
+            os.remove(p)
+
+        rec.write_outputs()
+        return rec
 
     def plot_timeline(self):
         n = max(len(s) for s in self.detect_seqs)
