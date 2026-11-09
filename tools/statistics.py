@@ -83,10 +83,9 @@ class GWADStatistics:
 
     def update(self, ds, norm):
         # update overall histogram. note it is not HoDS
-        bin = (-1) - ds
-        bin = torch.abs(bin)
+        # int(|(-1) - ds| // bin_size) in float32, as torch does for the float32 ds tensor
         bin_size = 2 / self.num_bins
-        b_idx = bin // bin_size
+        b_idx = np.abs(np.float32(-1) - np.float32(float(ds))) // np.float32(bin_size)
 
         self.hist[int(b_idx)] += 1
 

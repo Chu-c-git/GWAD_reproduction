@@ -64,15 +64,17 @@ def main(args):
                                classes, delta_net.classes, args.save_every)
 
     """ test scenario """
-    try:
-        if args.scenario == "benign":
-            seq_queries.benign(device, cfg, args.data, target_model, delta_net, test_ldr, args.n_images, recorder)
-        else:
-            seq_queries.attack(device, cfg, args.data, target_model, delta_net, test_ldr, args.n_images, recorder)
-    finally:
-        # keep results of finished images even if the run is interrupted
-        if recorder is not None:
-            recorder.finish()
+    # every query is a pure forward pass (black-box attacks never backprop), so skip autograd bookkeeping
+    with torch.inference_mode():
+        try:
+            if args.scenario == "benign":
+                seq_queries.benign(device, cfg, args.data, target_model, delta_net, test_ldr, args.n_images, recorder)
+            else:
+                seq_queries.attack(device, cfg, args.data, target_model, delta_net, test_ldr, args.n_images, recorder)
+        finally:
+            # keep results of finished images even if the run is interrupted
+            if recorder is not None:
+                recorder.finish()
 
 
 if __name__ == '__main__':

@@ -2,6 +2,7 @@
 .venv/
 __pycache__/
 *.pyc
+.vscode/
 
 # downloaded dataset / target model weights
 data/
