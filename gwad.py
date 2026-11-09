@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import torchvision.transforms as T
 from gwad_sub import ExampleSave, Screener
+from utilities.load_model import graphed_forward
 
 
 _DS_TRANSFORM = T.Compose([
@@ -12,12 +13,19 @@ _DS_TRANSFORM = T.Compose([
 ])
 
 
+USE_HX_CACHE = True
+USE_CUDA_GRAPH = True
+
+
 def _ds_feature(x):
     # per-example feature normalisation strategy (computed once per queued example)
     # 1. dimensionality normalisation
     #   - (discarded) convert to grayscale
     #   - convert to low dimension space using bilinear resizing method
-    x = _DS_TRANSFORM(x).flatten().cpu()
+    if tuple(x.shape[-2:]) != (32, 32):
+        # (T.Resize to the size the image already has returns it unchanged)
+        x = _DS_TRANSFORM(x)
+    x = x.flatten().cpu()
 
     # 2. distribution normalisation
     #   - transpose to normal distribution with mu = 0.0
@@ -26,14 +34,15 @@ def _ds_feature(x):
     return x
 
 
-def _ds_from_features(x0, x1, x2):
-    # calculate delta feature
-    d0 = (x1 - x0)
+def _ds_from_features(x0, x1, x2, d0=None, d0_norm=None):
+    # calculate delta feature (d0 / d0_norm may be passed in when already known)
+    if d0 is None:
+        d0 = (x1 - x0)
+        d0_norm = torch.norm(d0)
     d1 = (x2 - x1)
 
     # delta similarity - cosine angle of two delta
     dot_product = torch.matmul(d0, d1)
-    d0_norm = torch.norm(d0)
     d1_norm = torch.norm(d1)
     if d0_norm == 0 or d1_norm == 0:
         raw_angle = torch.tensor(1e-32)
@@ -45,11 +54,17 @@ def _ds_from_features(x0, x1, x2):
         print("warning : angle is nan!!")
 
     ds = raw_angle
-    return ds, abs_angle, d0_norm, d1_norm
+    return ds, abs_angle, d0_norm, d1_norm, d1
+
+
+def _hods_bin(ds, bin_size):
+    # index of ds in a histogram over [-1, 1]: int(|(-1) - ds| // bin_size), evaluated in
+    # float32 exactly as the original torch ops on the float32 ds tensor did
+    return int(np.abs(np.float32(-1) - np.float32(float(ds))) // np.float32(bin_size))
 
 
 def extract_ds(x0, x1, x2):
-    return _ds_from_features(_ds_feature(x0), _ds_feature(x1), _ds_feature(x2))
+    return _ds_from_features(_ds_feature(x0), _ds_feature(x1), _ds_feature(x2))[:4]
 
 
 class GWAD():
@@ -61,6 +76,8 @@ class GWAD():
         self.mode = mode
         self.model = model
         self.delta_net = delta_net
+        # batch-1 target-model forward replayed as a CUDA graph (bit-identical; eager fallback on CPU)
+        self._model_fwd = graphed_forward(model) if model is not None else None
         self.example_save = ExampleSave(cfg["model"]["data_mu"], cfg["model"]["data_std"], cfg["model"]["data_format"])
         enable = cfg["screen"]["on"]
         thold = cfg["screen"]["thold"]
@@ -71,17 +88,31 @@ class GWAD():
         # of each queued example, kept in lockstep with example_q
         self.example_q = []
         self.feat_q = []
+        # (f1, f2, d1, d1_norm) of the last ds: d1 = f2 - f1 is the next d0 when the
+        # queue has shifted by one example
+        self._last_delta = None
 
         # ds configurations
         self.ds_size = 16*16
         self.ds_q = []
         self.ds_out = 0
         self.ds_in = 0
+        # hods bin index of each queued ds (in lockstep with ds_q)
+        self.bin_q = []
+        self.bin_out = 0
+        self.bin_in = 0
 
         # hods configuration
         self.hods_bins = 200
-        self.hods_vector = [0]
+        self.hods_vector = [0]  # HoDS counts, float32 numpy array (1, hods_bins + 1)
         self.hods_flag = False
+        # Delta-Net prediction for each HoDS seen (deterministic network, so the same
+        # histogram always yields the same class); cleared on reset
+        self._hx_cache = {}
+        self._hx_cache_max = 1 << 16
+        # captured Delta-Net CUDA graph: (key, graph, static input, static output)
+        self._graph = None
+        self._graph_failed = False
 
         self.show_detect = True
         self.query_cnt = 0
@@ -102,14 +133,52 @@ class GWAD():
 
     def defended_model(self, x):
         self.query_cnt += 1
-        return self.model(x)
+        return self._model_fwd(x)
 
     def delta_model(self, feat):
+        # feat may live on the CPU; it is moved to the Delta-Net's device here
         self.delta_query_cnt += 1
         self.delta_net.eval()
-        output = self.delta_net(feat)
+        output = self._delta_forward(feat)
         _, hx = output.data.max(1)
         return hx
+
+    def _delta_forward(self, feat):
+        # Delta-Net forward. On CUDA the (fixed-shape, batch-1) forward is captured
+        # once into a CUDA graph and replayed: the same kernels run on the same
+        # weights, so the output is bit-identical to the eager forward while the
+        # ~20 kernel launches per query become one graph launch.
+        dev = torch.device(self.device)
+        if USE_CUDA_GRAPH and dev.type == 'cuda' and not torch.is_grad_enabled():
+            key = (id(self.delta_net), tuple(feat.shape), feat.dtype)
+            g = self._graph if self._graph is not None and self._graph[0] == key else None
+            if g is None and not self._graph_failed:
+                try:
+                    g = self._capture_delta_graph(key, feat, dev)
+                except Exception as e:  # fall back to the eager forward
+                    print('GWAD: Delta-Net CUDA graph capture failed (%s); using eager forward' % e)
+                    self._graph_failed = True
+                    g = None
+            if g is not None:
+                _, gr, static_in, static_out = g
+                static_in.copy_(feat)
+                gr.replay()
+                return static_out
+        return self.delta_net(feat.to(dev))
+
+    def _capture_delta_graph(self, key, feat, dev):
+        static_in = torch.zeros(feat.shape, dtype=feat.dtype, device=dev)
+        s = torch.cuda.Stream(device=dev)
+        s.wait_stream(torch.cuda.current_stream(dev))
+        with torch.cuda.stream(s):
+            for _ in range(3):
+                self.delta_net(static_in)
+        torch.cuda.current_stream(dev).wait_stream(s)
+        gr = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(gr):
+            static_out = self.delta_net(static_in)
+        self._graph = (key, gr, static_in, static_out)
+        return self._graph
 
     def reset(self):
         self.stats.reset()
@@ -120,8 +189,11 @@ class GWAD():
         self.screener.reset()
         self.example_q.clear()
         self.feat_q.clear()
+        self._last_delta = None
         self.ds_q.clear()
+        self.bin_q.clear()
         self.hods_flag = False
+        self._hx_cache.clear()
         self.first_detect = None
         print("\nGWAD_%s starts" % (self.mode))
         return
@@ -138,13 +210,19 @@ class GWAD():
             self.example_q.pop(0)
             self.feat_q.pop(0)
 
+        # single device->host copy; the screener image and the ds feature are both
+        # computed from it (elementwise float32 ops, identical on CPU and GPU)
+        xc = x.detach().cpu()
+        if xc is x:
+            xc = x.clone()
+
         self.suspicious = True
         # check if example is suspicious
-        self.suspicious = self.screener.run(self.example_save.ready_img(x))
+        self.suspicious = self.screener.run(self.example_save.ready_img(xc))
         if self.suspicious:
             # suspicious query, pass to gwad
-            self.example_q.append(x)
-            self.feat_q.append(_ds_feature(x))
+            self.example_q.append(xc)
+            self.feat_q.append(_ds_feature(xc))
         return
 
     def dss_ready(self):
@@ -158,17 +236,19 @@ class GWAD():
 
     def ds_queue(self, ds):
         # if ds queue is full shift and empty oldest slot for new ds
+        b = _hods_bin(ds, 2 / self.hods_bins)
         if self.dss_ready():
             self.ds_in = ds
             self.ds_out = self.ds_q.pop(0)
+            self.bin_in = b
+            self.bin_out = self.bin_q.pop(0)
         self.ds_q.append(ds)
+        self.bin_q.append(b)
         return
 
-    def set_hods_element(self, ele, action):
-        bin = (-1) - ele
-        bin = torch.abs(bin)
-        bin_size = 2 / self.hods_bins
-        b_idx = bin // bin_size
+    def set_hods_element(self, ele, action, b_idx=None):
+        if b_idx is None:
+            b_idx = _hods_bin(ele, 2 / self.hods_bins)
         if action == 'add':
             self.hods_vector[0, int(b_idx)] += 1
         elif action == 'remove':
@@ -184,28 +264,36 @@ class GWAD():
             if self.hods_flag is False:
                 # create hods feature vector
                 self.hods_flag = True
-                self.hods_vector = torch.zeros(1, self.hods_bins + 1)
+                # (kept on the CPU; only the normalised feature goes to the Delta-Net)
+                self.hods_vector = np.zeros((1, self.hods_bins + 1), dtype=np.float32)
                 for i in range(len(feature)):
-                    self.set_hods_element(feature[i], 'add')
-                self.hods_vector = self.hods_vector.to(self.device)
+                    self.set_hods_element(feature[i], 'add', self.bin_q[i])
             else:
                 # hods feature vector has been created, just modify hods with old and new ds.
-                self.set_hods_element(self.ds_out, 'remove')
-                self.set_hods_element(self.ds_in, 'add')
+                self.set_hods_element(self.ds_out, 'remove', self.bin_out)
+                self.set_hods_element(self.ds_in, 'add', self.bin_in)
         return
 
     def attack_detect(self):
         flag = False
         if self.dss_ready():
-            # normalise hods
-            m0 = torch.min(self.hods_vector)
-            m1 = torch.max(self.hods_vector)
-            hods = (self.hods_vector - m0) / (m1 - m0)
+            key = self.hods_vector.tobytes()
+            hx = self._hx_cache.get(key) if USE_HX_CACHE else None
+            if hx is None:
+                # normalise hods (float32, same arithmetic as on the GPU)
+                m0 = self.hods_vector.min()
+                m1 = self.hods_vector.max()
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    hods = (self.hods_vector - m0) / (m1 - m0)
 
-            # Delta-Net predicts the type of attack
-            hx = self.delta_model(hods)
-            hx = hx.cpu()
-            del hods
+                # Delta-Net predicts the type of attack
+                hx = int(self.delta_model(torch.from_numpy(hods)))
+                if len(self._hx_cache) >= self._hx_cache_max:
+                    self._hx_cache.clear()
+                self._hx_cache[key] = hx
+            else:
+                # same HoDS as an earlier query: Delta-Net output is the same
+                self.delta_query_cnt += 1
 
             # check Delta-Net prediction
             self.last_pred = self.classes[hx]
@@ -228,8 +316,16 @@ class GWAD():
         # get the cached features of the three consecutive queued examples
         f0, f1, f2 = self.feat_q
 
+        # reuse d0 = f1 - f0 when it was the previous query's d1
+        last = self._last_delta
+        if last is not None and last[0] is f0 and last[1] is f1:
+            d0, d0_norm = last[2], last[3]
+        else:
+            d0, d0_norm = None, None
+
         # get delta similarity
-        ds, _, d0_norm, _ = _ds_from_features(f0, f1, f2)
+        ds, _, d0_norm, d1_norm, d1 = _ds_from_features(f0, f1, f2, d0, d0_norm)
+        self._last_delta = (f1, f2, d1, d1_norm)
 
         return ds, d0_norm
 
@@ -264,7 +360,9 @@ class GWAD():
         # q.x - example
 
         # get example
-        x = q.x.clone().detach()
+        # (no copy needed: the model does not modify its input and the detector
+        # keeps its own host copy of the example)
+        x = q.x.detach()
 
         if self.mode != 'simulate':
             # query to target model to defend
