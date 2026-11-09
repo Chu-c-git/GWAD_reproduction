@@ -304,7 +304,7 @@ if __name__ == '__main__':
     # CPU threads per worker process (OMP/MKL_NUM_THREADS)
     parser.add_argument('--worker_threads', type=int, default=2)
     # restart a worker that made no progress for this many seconds (it is killed, its finished images are kept)
-    parser.add_argument('--worker_timeout', type=int, default=180)
+    parser.add_argument('--worker_timeout', type=int, default=60)
     # restarts per shard before giving up
     parser.add_argument('--worker_retries', type=int, default=3)
     # internal, set by --workers: attack only share k of N as part <k>.<attempt> and write results in run_dir
