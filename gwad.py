@@ -204,17 +204,24 @@ class GWAD():
             return True
         return False
 
-    def examples_queue(self, x):
-        if self.examples_ready():
-            # if examples queue is full shift and empty oldest slot for new example
-            self.example_q.pop(0)
-            self.feat_q.pop(0)
-
+    @staticmethod
+    def host_copy(x):
         # single device->host copy; the screener image and the ds feature are both
         # computed from it (elementwise float32 ops, identical on CPU and GPU)
         xc = x.detach().cpu()
         if xc is x:
             xc = x.clone()
+        return xc
+
+    def examples_queue(self, x, xc=None):
+        # xc: host copy of x made by the caller (see run), otherwise made here
+        if self.examples_ready():
+            # if examples queue is full shift and empty oldest slot for new example
+            self.example_q.pop(0)
+            self.feat_q.pop(0)
+
+        if xc is None:
+            xc = self.host_copy(x)
 
         self.suspicious = True
         # check if example is suspicious
@@ -364,6 +371,12 @@ class GWAD():
         # keeps its own host copy of the example)
         x = q.x.detach()
 
+        # copy the example to the host BEFORE launching the target model: the copy waits for all queued GPU
+        # work, so taking it after the launch would make the CPU idle until the forward pass finishes.
+        # this way the (asynchronous) forward pass runs on the GPU while the CPU does the detection below;
+        # the GPU work and its order are unchanged, so results are identical
+        xc = self.host_copy(x) if self.mode != 'off' else None
+
         if self.mode != 'simulate':
             # query to target model to defend
             output = self.defended_model(x)
@@ -376,7 +389,7 @@ class GWAD():
 
         # -- attack detection routine --
         # pre-process and example queue
-        self.examples_queue(x)
+        self.examples_queue(x, xc)
 
         # save query and update pre-process stats
         if self.mode == 'defence':

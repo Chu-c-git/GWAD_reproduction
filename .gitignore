@@ -13,3 +13,4 @@ model/cifar10/
 
 # GWAD run results (--save_dir)
 results/
+stats/shards/
