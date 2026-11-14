@@ -85,6 +85,8 @@ def run_workers(args, cfg):
         base += ["--n_images", str(args.n_images)]
     if args.model is not None:
         base += ["--model", args.model]
+    if args.early_stop:
+        base += ["--early_stop"]
     if args.save_dir is not None:
         base += ["--save_dir", args.save_dir]
 
@@ -277,7 +279,7 @@ def main(args):
             else:
                 seq_queries.attack(device, cfg, args.data, target_model, delta_net, test_ldr, args.n_images, recorder,
                                    seed=args.seed, shard=shard, part_state=part_state,
-                                   skip=skip, heartbeat=heartbeat)
+                                   skip=skip, heartbeat=heartbeat, stop=args.early_stop)
         finally:
             # keep results of finished images even if the run is interrupted
             if recorder is not None:
@@ -299,6 +301,9 @@ if __name__ == '__main__':
     parser.add_argument('--save_every', type=int, default=500)
     # seed every attacked image with seed + test index (default: unseeded, one RNG stream across images)
     parser.add_argument('--seed', type=int, default=None)
+    # stop attacking an image once the attack's own stop criterion is met (e.g. RayS: adversarial within epsilon)
+    # instead of spending the whole query budget
+    parser.add_argument('--early_stop', action='store_true')
     # attack the images in N parallel processes sharing the GPU and merge the results (implies --seed 0)
     parser.add_argument('--workers', type=int, default=1)
     # CPU threads per worker process (OMP/MKL_NUM_THREADS)

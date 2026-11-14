@@ -45,6 +45,8 @@ def get_attack_algorithm(data_type, device, cfg, model, q_budgets, stop=True):
             alg = attack.SignOpt(device, model=model, q_budgets=q_budgets, eps=255, beta=0.001, stop=stop)
         elif alg_type == 'sign-flip':
             alg = attack.SignFlip(device, model=model, q_budgets=q_budgets, eps=0.1, stop=stop)
+        elif alg_type == 'rays':
+            alg = attack.RayS(device, model=model, q_budgets=q_budgets, epsilon=8/255, stop=stop)
         elif alg_type == 'square':
             alg = attack.Square2(device, model=model, q_budgets=q_budgets, eps=0.01, stop=stop)
         else:

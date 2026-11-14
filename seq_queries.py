@@ -137,7 +137,7 @@ def benign(device, cfg, data_type, model, delta_net, loader, n_images=None, reco
 
 
 def attack(device, cfg, data_type, model, delta_net, loader, n_images=None, recorder=None,
-           seed=None, shard=None, part_state=None, skip=(), heartbeat=None):
+           seed=None, shard=None, part_state=None, skip=(), heartbeat=None, stop=False):
     # seed  : None keeps the global RNG stream running across images (original behaviour),
     #         otherwise every image is attacked after seed_image(seed, test_idx)
     # shard : (k, n) attack only images whose attack index i (0-based, benign pool excluded) has i % n == k.
@@ -209,7 +209,7 @@ def attack(device, cfg, data_type, model, delta_net, loader, n_images=None, reco
 
         # instantiate attack model to conduct fresh attack
         attack = ATTACK_MODEL(data_type, device, stats.attack, cfg_attack,
-                              d_model=d_model, q_budgets=q_budgets, stop=False)
+                              d_model=d_model, q_budgets=q_budgets, stop=stop)
 
         # set adaptive attack
         attack.set_adaptive(adapt_type, move_rate, batch_size, x2_pool)
